@@ -1,4 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { getVersion } from '../core/file/packageJsonParse.js';
 import { logger } from '../shared/logger.js';
@@ -85,4 +87,106 @@ export const runMcpServer = async (deps: Dependencies = defaultDependencies) => 
     logger.error('Failed to start MCP server:', error);
     processExit(1);
   }
+};
+
+export interface McpHttpOptions {
+  host?: string;
+  port?: number;
+}
+
+const DEFAULT_MCP_HTTP_HOST = '0.0.0.0';
+const DEFAULT_MCP_HTTP_PORT = 8088;
+
+/**
+ * Run the MCP server with Streamable HTTP transport.
+ * Creates an Express app that handles MCP requests via HTTP streaming.
+ */
+export const runMcpHttpServer = async (
+  options: McpHttpOptions = {},
+  deps: Dependencies = defaultDependencies,
+) => {
+  const host = options.host ?? DEFAULT_MCP_HTTP_HOST;
+  const port = options.port ?? DEFAULT_MCP_HTTP_PORT;
+  const processExit = deps.processExit ?? process.exit;
+
+  const app = createMcpExpressApp({ host });
+
+  // POST /mcp - Main MCP endpoint (stateless mode: new server per request)
+  app.post('/mcp', async (req, res) => {
+    const server = await createMcpServer();
+    try {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined, // Stateless mode
+      });
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+      res.on('close', () => {
+        logger.trace('Streamable HTTP request closed');
+        transport.close();
+        server.close();
+      });
+    } catch (error) {
+      logger.error('Error handling MCP request:', error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32603,
+            message: 'Internal server error',
+          },
+          id: null,
+        });
+      }
+    }
+  });
+
+  // GET /mcp - Not allowed in stateless mode
+  app.get('/mcp', async (_req, res) => {
+    res.writeHead(405).end(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        error: {
+          code: -32000,
+          message: 'Method not allowed.',
+        },
+        id: null,
+      }),
+    );
+  });
+
+  // DELETE /mcp - Not allowed in stateless mode
+  app.delete('/mcp', async (_req, res) => {
+    res.writeHead(405).end(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        error: {
+          code: -32000,
+          message: 'Method not allowed.',
+        },
+        id: null,
+      }),
+    );
+  });
+
+  // Keep the process alive by wrapping listen in a Promise
+  await new Promise<void>((_resolve, reject) => {
+    const httpServer = app.listen(port, host, () => {
+      logger.log(`Repomix MCP Streamable HTTP Server listening on http://${host}:${port}/mcp`);
+    });
+
+    httpServer.on('error', (error: Error) => {
+      logger.error('Failed to start MCP HTTP server:', error);
+      reject(error);
+    });
+
+    const handleExit = async () => {
+      logger.trace('Repomix MCP HTTP Server shutting down...');
+      httpServer.close(() => {
+        processExit(0);
+      });
+    };
+
+    process.on('SIGINT', handleExit);
+    process.on('SIGTERM', handleExit);
+  });
 };

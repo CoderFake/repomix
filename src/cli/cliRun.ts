@@ -175,6 +175,17 @@ export const run = async () => {
       // MCP
       .optionsGroup('MCP')
       .option('--mcp', 'Run as Model Context Protocol server for AI tool integration')
+      .option(
+        '--mcp-transport <type>',
+        'MCP transport type: stdio or streamable-http (default: stdio)',
+      )
+      .option('--mcp-host <host>', 'Host to bind MCP HTTP server (default: 0.0.0.0)')
+      .option('--mcp-port <port>', 'Port for MCP HTTP server (default: 8088)', (v: string) => {
+        if (!/^\d+$/.test(v)) {
+          throw new RepomixError(`Invalid port number: '${v}'. Must be a positive integer.`);
+        }
+        return Number(v);
+      })
       // Skill Generation
       .optionsGroup('Skill Generation (Experimental)')
       .option(
@@ -253,7 +264,7 @@ export const runCli = async (directories: string[], cwd: string, options: CliOpt
 
   if (options.mcp) {
     const { runMcpAction } = await import('./actions/mcpAction.js');
-    return await runMcpAction();
+    return await runMcpAction(options);
   }
 
   if (options.version) {

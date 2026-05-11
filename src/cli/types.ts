@@ -57,6 +57,9 @@ export interface CliOptions extends OptionValues {
 
   // MCP
   mcp?: boolean;
+  mcpTransport?: 'stdio' | 'streamable-http';
+  mcpHost?: string;
+  mcpPort?: number;
 
   // Skill Generation
   skillGenerate?: string | boolean;
